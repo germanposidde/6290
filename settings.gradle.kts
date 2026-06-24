@@ -1,4 +1,4 @@
-rootProject.name = "Template"
+rootProject.name = "PyranaRoyale6289"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {

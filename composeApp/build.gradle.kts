@@ -8,6 +8,7 @@ plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
+    alias(libs.plugins.kotlinSerialization)
 
     id("com.google.gms.google-services")
     id("com.google.firebase.crashlytics")
@@ -58,6 +59,10 @@ kotlin {
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
 
+            implementation(libs.kotlinx.serialization.json)
+            implementation(libs.multiplatform.settings)
+            implementation(libs.multiplatform.settings.no.arg)
+
             implementation("io.ktor:ktor-client-core:3.1.3")
         }
         commonTest.dependencies {
@@ -70,11 +75,11 @@ kotlin {
 }
 
 android {
-    namespace = "com.kmp.template"
+    namespace = "com.kmp.pyr"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.kmp.template"
+        applicationId = "com.aifactory.checkout.v2"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
