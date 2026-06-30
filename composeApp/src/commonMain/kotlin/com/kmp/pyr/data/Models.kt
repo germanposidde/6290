@@ -121,7 +121,7 @@ data class KingdomPrefs(
     val ornamentation: Boolean = true,
     val richTextures: Boolean = true,
     val currencyGlyph: String = "𓋞",
-    val kingdomName: String = "Kingdom of the Two Lands",
+    val kingdomName: String = "The Two Lands",
     val onboarded: Boolean = false,
     val sealImageBase64: String? = null,
 )

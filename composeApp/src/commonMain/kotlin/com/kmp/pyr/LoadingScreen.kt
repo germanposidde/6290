@@ -48,14 +48,6 @@ fun LoadingScreen() {
                     tint = EgyptColors.GoldBright,
                     strokeWidth = 3f,
                 )
-                Spacer(Modifier.height(28.dp))
-                Text(
-                    "KINGDOM",
-                    color = EgyptColors.Gold,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 8.sp,
-                )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Summoning the royal archive…",

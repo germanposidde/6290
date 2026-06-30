@@ -34,7 +34,7 @@ fun WelcomeDialog(kingdomName: String, onEnter: () -> Unit) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                 GlyphIcon(com.kmp.pyr.ui.motif.EgyptGlyph.SUN_DISC, size = 44.dp, tint = EgyptColors.GoldBright, strokeWidth = 3f)
                 Spacer(Modifier.height(8.dp))
-                Text("Welcome to Kingdom", fontWeight = FontWeight.Bold)
+                Text("Welcome", fontWeight = FontWeight.Bold)
                 Text(kingdomName, color = EgyptColors.TextMuted, fontSize = 12.sp)
             }
         },
@@ -63,7 +63,7 @@ fun WelcomeDialog(kingdomName: String, onEnter: () -> Unit) {
             }
         },
         confirmButton = {
-            GoldButton("Enter the Kingdom", onClick = onEnter, glyph = com.kmp.pyr.ui.motif.EgyptGlyph.ANKH)
+            GoldButton("Enter", onClick = onEnter, glyph = com.kmp.pyr.ui.motif.EgyptGlyph.ANKH)
         },
     )
 }

@@ -27,10 +27,13 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -114,7 +117,7 @@ fun SettingsScreen(repo: KingdomRepository, onOpenLegal: (url: String, title: St
         // Royal Seal — camera / gallery portrait
         item {
             EgyptCard(Modifier.fillMaxWidth()) {
-                SectionHeader("Royal Seal", eyebrow = "Kingdom Portrait", glyph = EgyptGlyph.ANKH, caption = "Add a portrait from your camera or photo library")
+                SectionHeader("Royal Seal", eyebrow = "Portrait", glyph = EgyptGlyph.ANKH, caption = "Add a portrait from your camera or photo library")
                 Spacer(Modifier.height(14.dp))
                 val seal = remember(snap.prefs.sealImageBase64) { decodeSealBitmap(snap.prefs.sealImageBase64) }
                 Box(
@@ -149,7 +152,7 @@ fun SettingsScreen(repo: KingdomRepository, onOpenLegal: (url: String, title: St
                 OutlinedTextField(
                     value = snap.prefs.kingdomName,
                     onValueChange = { repo.updatePrefs(snap.prefs.copy(kingdomName = it)) },
-                    label = { Text("Kingdom name") },
+                    label = { Text("Name") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
@@ -282,7 +285,14 @@ fun SettingsScreen(repo: KingdomRepository, onOpenLegal: (url: String, title: St
         }
     }
 
-    if (showBackup) BackupDialog(repo.exportJson()) { showBackup = false }
+    if (showBackup) {
+        // Serialize the snapshot off the main thread; the dialog shows "Preparing…" until ready.
+        var backupJson by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(Unit) {
+            backupJson = withContext(Dispatchers.Default) { repo.exportJson() }
+        }
+        BackupDialog(json = backupJson, onDismiss = { showBackup = false })
+    }
     if (showRestore) RestoreDialog(
         onDismiss = { showRestore = false },
         onRestore = { json -> repo.restoreFrom(json) },

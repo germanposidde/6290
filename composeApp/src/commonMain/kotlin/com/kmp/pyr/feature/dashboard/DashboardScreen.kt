@@ -78,7 +78,7 @@ fun DashboardScreen(repo: KingdomRepository, navigate: (Destination) -> Unit) {
         item {
             ScreenIntro(
                 eyebrow = snap.prefs.kingdomName,
-                title = "Kingdom Dashboard",
+                title = "Dashboard",
                 subtitle = "${guide.subtitle} · ${Fmt.date(snap.today)}",
                 onHelp = { showHelp = true },
             )

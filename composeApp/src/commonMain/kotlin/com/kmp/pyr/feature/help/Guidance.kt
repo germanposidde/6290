@@ -7,7 +7,7 @@ data class ScreenGuide(val title: String, val subtitle: String, val points: List
 
 val SCREEN_GUIDES: Map<Destination, ScreenGuide> = mapOf(
     Destination.DASHBOARD to ScreenGuide(
-        title = "Kingdom Dashboard",
+        title = "Dashboard",
         subtitle = "Your kingdom at a glance",
         points = listOf(
             "The four cards show your current treasury of Gold, Grain, Stone and Labor — your accumulated stores, with the day-over-day change and a mini trend.",

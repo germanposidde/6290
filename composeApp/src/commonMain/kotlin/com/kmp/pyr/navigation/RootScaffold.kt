@@ -6,7 +6,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -20,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kmp.pyr.data.KingdomRepository
@@ -40,11 +43,15 @@ fun RootScaffold(repo: KingdomRepository) {
     var webPage by remember { mutableStateOf<WebPage?>(null) }
     val navigate: (Destination) -> Unit = { current = it }
 
+    // Hide the bottom navigation bar while the soft keyboard is open, otherwise
+    // adjustResize pushes the dark-blue bar up so it floats on top of the keyboard.
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = Color.Transparent,
         bottomBar = {
-            NavigationBar(containerColor = EgyptColors.NightDeep, tonalElevation = 0.dp) {
+            if (!imeVisible) NavigationBar(containerColor = EgyptColors.NightDeep, tonalElevation = 0.dp) {
                 Destination.entries.forEach { dest ->
                     val selected = dest == current
                     NavigationBarItem(
