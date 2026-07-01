@@ -32,8 +32,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,8 +76,6 @@ private enum class ArchiveFilter(val label: String, val kind: ActivityKind?) {
 @Composable
 fun SettingsScreen(repo: KingdomRepository, onOpenLegal: (url: String, title: String) -> Unit) {
     val snap = repo.snapshot
-    var showBackup by remember { mutableStateOf(false) }
-    var showRestore by remember { mutableStateOf(false) }
     var showReset by remember { mutableStateOf(false) }
     var showErase by remember { mutableStateOf(false) }
 
@@ -196,16 +192,11 @@ fun SettingsScreen(repo: KingdomRepository, onOpenLegal: (url: String, title: St
             }
         }
 
-        // Backup / restore
+        // Data management
         item {
             EgyptCard(Modifier.fillMaxWidth()) {
-                SectionHeader("Data Vault", eyebrow = "Backup & Restore", glyph = EgyptGlyph.SCARAB, caption = "Back up to copyable text, or restore from a backup you paste in")
+                SectionHeader("Data Vault", eyebrow = "Manage Data", glyph = EgyptGlyph.SCARAB, caption = "Reset your kingdom to seed data, or erase everything")
                 Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    GoldButton("Backup", onClick = { repo.recordBackup(); showBackup = true }, modifier = Modifier.weight(1f))
-                    GoldOutlinedButton("Restore", onClick = { showRestore = true }, modifier = Modifier.weight(1f))
-                }
-                Spacer(Modifier.height(8.dp))
                 GoldOutlinedButton("Reset to Seed Data", onClick = { showReset = true }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
                 DangerButton("Erase All Data", onClick = { showErase = true }, modifier = Modifier.fillMaxWidth())
@@ -285,18 +276,6 @@ fun SettingsScreen(repo: KingdomRepository, onOpenLegal: (url: String, title: St
         }
     }
 
-    if (showBackup) {
-        // Serialize the snapshot off the main thread; the dialog shows "Preparing…" until ready.
-        var backupJson by remember { mutableStateOf<String?>(null) }
-        LaunchedEffect(Unit) {
-            backupJson = withContext(Dispatchers.Default) { repo.exportJson() }
-        }
-        BackupDialog(json = backupJson, onDismiss = { showBackup = false })
-    }
-    if (showRestore) RestoreDialog(
-        onDismiss = { showRestore = false },
-        onRestore = { json -> repo.restoreFrom(json) },
-    )
     if (showReset) ConfirmDialog(
         title = "Reset to Seed Data?",
         message = "This replaces all current records with the default kingdom. This cannot be undone.",
@@ -306,7 +285,7 @@ fun SettingsScreen(repo: KingdomRepository, onOpenLegal: (url: String, title: St
     )
     if (showErase) ConfirmDialog(
         title = "Erase All Data?",
-        message = "This permanently deletes every record, projection, project and setting, leaving an empty kingdom. This cannot be undone — back up first if unsure.",
+        message = "This permanently deletes every record, projection, project and setting, leaving an empty kingdom. This cannot be undone.",
         confirmText = "Erase Everything",
         onConfirm = { repo.eraseAll(); showErase = false },
         onDismiss = { showErase = false },
