@@ -55,14 +55,12 @@ val SCREEN_GUIDES: Map<Destination, ScreenGuide> = mapOf(
     ),
     Destination.SETTINGS to ScreenGuide(
         title = "Temple Settings & Archive",
-        subtitle = "Preferences, backups and full history",
+        subtitle = "Preferences and full history",
         points = listOf(
             "Set a Royal Seal portrait with the Camera or Gallery buttons; tap “Remove Seal” to clear it.",
             "Rename your kingdom and toggle ornamentation and textures.",
-            "“Backup” shows your data as text you can copy and keep safe.",
-            "“Restore” rebuilds your kingdom from a backup you paste in.",
             "“Reset to Seed Data” returns everything to the demo starting point.",
-            "“Erase All Data” permanently wipes everything to an empty kingdom — back up first.",
+            "“Erase All Data” permanently wipes everything to an empty kingdom.",
             "Search and filter the Archive to find any past record.",
         ),
     ),
