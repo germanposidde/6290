@@ -5,10 +5,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.kmp.pyr.roam.StartCache
+import com.kmp.pyr.roam.localnav.LocalNavObj
+import com.kmp.pyr.roam.localnav.ScreenManager
 
 class MainActivity : ComponentActivity() {
 
@@ -35,8 +40,15 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         hideSystemBars()
 
+        val startCache = StartCache(this, intent)
         setContent {
-            App()
+            val screen by LocalNavObj.screen.collectAsState()
+            when (screen) {
+                ScreenManager.Welcome -> LoadingScreenA(this@MainActivity, startCache)
+                ScreenManager.MenuPoint -> App()
+                ScreenManager.InternetProblem -> NoInternetScreenA()
+                else -> {}
+            }
         }
     }
 }
