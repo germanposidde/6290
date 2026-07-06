@@ -26,7 +26,7 @@ import com.kmp.pyr.ui.theme.EgyptColors
 import com.kmp.pyr.ui.theme.EgyptTheme
 
 @Composable
-fun LoadingScreen() {
+fun LoadingScreen2() {
     EgyptTheme {
         NightBackground {
             val transition = rememberInfiniteTransition(label = "load")

