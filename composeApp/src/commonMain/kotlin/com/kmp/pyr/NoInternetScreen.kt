@@ -11,6 +11,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -35,16 +39,31 @@ fun NoInternetScreen(onRetry: () -> Unit) {
                 Spacer(Modifier.height(28.dp))
                 Text(
                     "The Nile Has Run Dry",
-                    color = EgyptColors.TextOnNight,
-                    fontSize = 22.sp,
+                    color = Color.White,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
+                    style = TextStyle(
+                        shadow = Shadow(
+                            color = Color(0xE6000000),
+                            offset = Offset(0f, 2f),
+                            blurRadius = 8f,
+                        ),
+                    ),
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "No connection could be found. Restore your link to the heavens and try again.",
-                    color = EgyptColors.TextMuted,
-                    fontSize = 14.sp,
+                    color = EgyptColors.TextOnNight,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
+                    style = TextStyle(
+                        shadow = Shadow(
+                            color = Color(0xCC000000),
+                            offset = Offset(0f, 1f),
+                            blurRadius = 6f,
+                        ),
+                    ),
                 )
                 Spacer(Modifier.height(28.dp))
                 GoldButton(

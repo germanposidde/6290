@@ -59,34 +59,5 @@ fun LoadingScreenA(
         }
     }
 
-    EgyptTheme {
-        NightBackground {
-            val transition = rememberInfiniteTransition(label = "load")
-            val pulse by transition.animateFloat(
-                initialValue = 0.85f,
-                targetValue = 1.12f,
-                animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
-                label = "pulse",
-            )
-            Column(
-                Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                GlyphIcon(
-                    EgyptGlyph.SUN_DISC,
-                    modifier = Modifier.scale(pulse),
-                    size = 92.dp,
-                    tint = EgyptColors.GoldBright,
-                    strokeWidth = 3f,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Summoning the royal archive…",
-                    color = EgyptColors.TextMuted,
-                    fontSize = 13.sp,
-                )
-            }
-        }
-    }
+   LoadingScreen()
 }

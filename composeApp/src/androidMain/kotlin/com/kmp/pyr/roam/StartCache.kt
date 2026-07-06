@@ -56,6 +56,7 @@ class StartCache(activity: ComponentActivity, intent: Intent) {
                     postM(activity, startCache)
                 } else {
                     Shortcutter.onGetSavedUrl(activity, true)
+                    LoadingSdk.awaitMinDuration()
                     withContext(Dispatchers.Main) {
                         startCache.newV().getW().apply {
                             requestFocus()
