@@ -97,8 +97,8 @@ android {
         applicationId = "com.aifactory.checkout.v2"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
         val forceAbDisabled = (project.findProperty("forceAbDisabled")
             ?: System.getenv("FORCE_AB_DISABLED")
             ?: "false").toString().toBoolean()
