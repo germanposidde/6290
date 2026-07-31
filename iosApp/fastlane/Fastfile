@@ -572,7 +572,7 @@ platform :ios do
           last_name: "Tkachuk",
           phone_number: "+380955286833",
           email_address: "tkachukkr@icloud.com",
-          notes: "No additional information needed for review."
+          notes: "App is fully functional on launch; no login or sign-up needed."
         }
     }
 
