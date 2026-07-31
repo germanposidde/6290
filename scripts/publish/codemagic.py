@@ -1,9 +1,17 @@
 import re
+import time
 from typing import Optional
 
 import requests
 
 BASE = "https://api.codemagic.io"
+
+# Codemagic build status: ONLY "finished" means success. These are the known
+# terminal failures; every other value (queued/building/publishing/...) is
+# treated as still-in-progress and bounded by the caller's timeout, so an unknown
+# status can never be mistaken for success.
+BUILD_SUCCESS = "finished"
+BUILD_FAILURES = {"failed", "canceled", "cancelled", "timeout", "skipped", "error", "aborted"}
 
 
 def extract_github_repo(app: dict) -> Optional[tuple]:
@@ -28,6 +36,21 @@ def extract_github_repo(app: dict) -> Optional[tuple]:
         if m:
             return m.group(1), m.group(2)
     return None
+
+
+def _iter_app_vars(node):
+    """Yield every variable object from a Codemagic app's `appEnvironmentVariables`,
+    flattening whatever container shape the API returns (a list, or a dict keyed
+    by group/id). A variable object is a dict carrying at least a "key"."""
+    if isinstance(node, dict):
+        if "key" in node and ("id" in node or "_id" in node):
+            yield node
+        else:
+            for v in node.values():
+                yield from _iter_app_vars(v)
+    elif isinstance(node, list):
+        for x in node:
+            yield from _iter_app_vars(x)
 
 
 class CodemagicClient:
@@ -61,22 +84,36 @@ class CodemagicClient:
         data = r.json()
         return data.get("application", data)
 
+    def _delete_variable(self, app_id: str, key: str, group: str):
+        """Delete any existing variable matching key+group (no-op if absent).
+
+        Codemagic returns the app's variables under `appEnvironmentVariables`
+        (NOT `environmentVariables`), including secure ones, each with an `id`.
+        """
+        app = self.get_app(app_id)
+        for v in _iter_app_vars(app.get("appEnvironmentVariables")):
+            if v.get("key") == key and v.get("group") == group:
+                var_id = v.get("id") or v.get("_id")
+                if var_id:
+                    self.session.delete(
+                        f"{BASE}/apps/{app_id}/variables/{var_id}"
+                    ).raise_for_status()
+
     def upsert_variable(
         self, app_id: str, key: str, value: str, group: str, secure: bool = False
     ):
-        app = self.get_app(app_id)
-        existing = app.get("environmentVariables", []) or []
-        for v in existing:
-            if v.get("key") == key and v.get("group") == group:
-                var_id = v.get("_id") or v.get("id")
-                if var_id:
-                    r = self.session.delete(f"{BASE}/apps/{app_id}/variables/{var_id}")
-                    r.raise_for_status()
-                break
-        r = self.session.post(
-            f"{BASE}/apps/{app_id}/variables",
-            json={"key": key, "value": value, "group": group, "secure": secure},
-        )
+        # Override semantics: delete any existing value, then create. Codemagic
+        # has no update endpoint, so re-create is how you override.
+        payload = {"key": key, "value": value, "group": group, "secure": secure}
+        self._delete_variable(app_id, key, group)
+        r = self.session.post(f"{BASE}/apps/{app_id}/variables", json=payload)
+        if not r.ok:
+            # The var may already exist even though GET /apps didn't surface it
+            # (e.g. secure vars aren't returned), so the delete above missed it
+            # and the create collided. Re-resolve, delete, and retry once so a
+            # re-run overrides the prior value instead of failing.
+            self._delete_variable(app_id, key, group)
+            r = self.session.post(f"{BASE}/apps/{app_id}/variables", json=payload)
         r.raise_for_status()
 
     def trigger_build(self, app_id: str, workflow_id: str, branch: str) -> str:
@@ -92,6 +129,32 @@ class CodemagicClient:
         r.raise_for_status()
         data = r.json()
         return data.get("build", data)
+
+    def wait_for_build(self, build_id: str, timeout_s: int, poll_s: int = 15, on_poll=None) -> str:
+        """Poll a build until it reaches a terminal status; return that status
+        ("finished" == success). Raises TimeoutError if it doesn't finish within
+        timeout_s. Transient errors while polling are swallowed and retried (a
+        long build is polled for many minutes), so only a sustained failure to
+        reach a terminal state trips the timeout. on_poll(status, elapsed) is
+        called each poll for progress reporting.
+        """
+        start = time.monotonic()
+        while True:
+            try:
+                build = self.get_build(build_id)
+                status = str(build.get("status") or build.get("buildStatus") or "").strip().lower()
+            except Exception:
+                status = ""  # transient (network/5xx) — treat as in-progress, retry
+            elapsed = time.monotonic() - start
+            if on_poll:
+                on_poll(status, elapsed)
+            if status == BUILD_SUCCESS or status in BUILD_FAILURES:
+                return status
+            if elapsed >= timeout_s:
+                raise TimeoutError(
+                    f"build {build_id} still {status or 'unknown'!r} after {int(elapsed)}s"
+                )
+            time.sleep(poll_s)
 
     def cancel_build(self, build_id: str):
         r = self.session.post(f"{BASE}/builds/{build_id}/cancel", timeout=30)
