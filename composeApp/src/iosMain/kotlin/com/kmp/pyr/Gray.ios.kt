@@ -1,5 +1,10 @@
 package com.kmp.pyr
 
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.kmp.pyr.connectivity.ConnectivityGate
@@ -16,21 +21,21 @@ import platform.Network.nw_path_monitor_start
 import platform.Network.nw_path_status_satisfied
 import platform.darwin.dispatch_queue_create
 
-@Composable
-actual fun Gray(
-    loading: @Composable (() -> Unit),
-    noInternet: @Composable ((onRetry: () -> Unit) -> Unit),
-    white: @Composable (() -> Unit)
-) {
-    val connectivity = remember { connectivityFlow() }
-    // iOS has no system back to block; the gate itself enforces the flow.
-    ConnectivityGate(
-        connectivity = connectivity,
-        loading = loading,
-        noInternet = noInternet,
-        white = white,
-    )
-}
+//@Composable
+//actual fun Gray(
+//    loading: @Composable (() -> Unit),
+//    noInternet: @Composable ((onRetry: () -> Unit) -> Unit),
+//    white: @Composable (() -> Unit)
+//) {
+//    val connectivity = remember { connectivityFlow() }
+//    // iOS has no system back to block; the gate itself enforces the flow.
+//    ConnectivityGate(
+//        connectivity = connectivity,
+//        loading = loading,
+//        noInternet = noInternet,
+//        white = white,
+//    )
+//}
 
 @OptIn(ExperimentalForeignApi::class)
 private fun connectivityFlow(): Flow<Boolean> = callbackFlow {

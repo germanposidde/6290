@@ -6,6 +6,8 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -18,7 +20,8 @@ import kotlinx.coroutines.flow.callbackFlow
 actual fun Gray(
     loading: @Composable (() -> Unit),
     noInternet: @Composable ((onRetry: () -> Unit) -> Unit),
-    white: @Composable (() -> Unit)
+    white: @Composable (() -> Unit),
+    transitionSpec: AnimatedContentTransitionScope<Int>.() -> ContentTransform
 ) {
     val context = LocalContext.current.applicationContext
     val connectivity = remember(context) { context.connectivityFlow() }
