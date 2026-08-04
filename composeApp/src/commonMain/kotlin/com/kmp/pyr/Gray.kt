@@ -12,5 +12,7 @@ expect fun Gray(
     loading: @Composable () -> Unit,
     noInternet: @Composable (onRetry: () -> Unit) -> Unit,
     white: @Composable () -> Unit,
-    transitionSpec: AnimatedContentTransitionScope<Int>.() -> ContentTransform
+    transitionSpec: AnimatedContentTransitionScope<Int>.() -> ContentTransform = {
+        fadeIn().togetherWith(fadeOut())
+    }
 )
