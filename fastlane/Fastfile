@@ -1,0 +1,529 @@
+# Self-contained Resolution Center readers, pushed by AppStoreMonitor to a
+# dedicated branch of each app's repo (overwritten on every run, so they're always
+# current — no template, no per-app backport). Both lanes log in to App Store
+# Connect over a WEB SESSION (the only auth that reaches Resolution Center; the
+# .p8 API does not expose it) and read the iris backend the ASC UI itself uses:
+#
+#   fetch_rejection_details    → the reviewer's message + guideline codes + attachments
+#                                for every rejection      → REJECTION_CALLBACK_URL
+#   check_account_termination  → Apple's account-level "app message" notices, where a
+#                                Pending Termination Notice lands → TERMINATION_CALLBACK_URL
+#
+# All inputs come from Codemagic env vars that AppStoreMonitor injects right
+# before triggering the build.
+
+default_platform(:ios)
+
+require "net/http"
+require "uri"
+require "json"
+require "base64"
+
+# Ruby 4 removed CGI.parse, and spaceship still calls it — upgrade_2fa_later_client.rb:18,
+# `params = CGI.parse(uri.query)` — on the web-session login path. Present in fastlane 2.238.0
+# through 2.240.0 and unfixed upstream (fastlane#30229, opened 2026-09-14).
+#
+# The day the build images moved to Ruby 4, that turned EVERY fresh web-session login into
+# "NoMethodError: undefined method 'parse' for class CGI": 44 of 45 login failures on 2026-09-14,
+# starting 23:45:35, against zero on the three days before. ASM reads that as Apple refusing the
+# login and hands the app to the browser-session fallback, which works only because a supplied
+# FASTLANE_SESSION skips this code path — so a batch of 48 rejections became 48 harvest jobs, and
+# the ones past the queue cap got nothing at all.
+#
+# This file is pushed fresh on every run, so shimming here fixes the whole fleet at once and does
+# not wait on fastlane or on the image. Drop it once spaceship stops calling CGI.parse.
+require "cgi"
+require "uri"
+unless CGI.respond_to?(:parse)
+  def CGI.parse(query)
+    # Matches the original's contract: name => [values], unknown keys => [], nil-safe. Deliberately
+    # hand-rolled rather than URI.decode_www_form, which raises on the malformed pairs (a bare flag
+    # with no "=") that Apple's redirects do contain.
+    params = Hash.new { |h, k| h[k] = [] }
+    query.to_s.split(/[&;]/).each do |pair|
+      next if pair.empty?
+      key, value = pair.split("=", 2)
+      params[CGI.unescape(key.to_s)] << CGI.unescape(value.to_s)
+    end
+    params
+  end
+end
+
+# How many times to try the web-session login. Two, not more: the failure that actually
+# matters — Apple's fraud check refusing the account outright — is not cleared by ANY number
+# of retries (that's what the browser-session fallback is for), so extra attempts would only
+# burn 2FA codes and build minutes. The second attempt exists for the ordinary transient
+# cases a single shot used to give up on: a slow SMS gateway, a 503 from Apple, a dropped TLS
+# handshake.
+WEB_LOGIN_ATTEMPTS = 2
+
+# Authenticate spaceship via a WEB SESSION (Apple ID + password). With no .p8
+# token set, spaceship routes to the iris host (appstoreconnect.apple.com/iris).
+# Creds come from FASTLANE_USER / FASTLANE_PASSWORD; SMS 2FA is automated below.
+# With a FASTLANE_SESSION injected (the browser-harvest fallback), spaceship validates that
+# session and never attempts SRP, so the first attempt succeeds and the retry never runs.
+def asc_web_login!
+  install_sms_2fa_patch!
+  last_error = nil
+  WEB_LOGIN_ATTEMPTS.times do |attempt|
+    begin
+      return Spaceship::ConnectAPI.login(use_portal: false, use_tunes: true)
+    rescue => e
+      last_error = e
+      UI.important("Web-session login attempt #{attempt + 1}/#{WEB_LOGIN_ATTEMPTS} failed: " \
+                   "#{e.class}: #{e.message.to_s.gsub(/\s+/, ' ')[0, 200]}")
+      sleep(10) unless attempt == WEB_LOGIN_ATTEMPTS - 1
+    end
+  end
+  # This wording is load-bearing: AppStoreMonitor matches it (SessionHarvest.WEB_LOGIN_FAILURE)
+  # to decide whether to recover through a browser-harvested session, and app-store-publisher's
+  # fallback keys off the same phrasing. The original class/message is kept in the tail so the
+  # "Invalid username and password" signature survives too.
+  UI.user_error!("Web-session login failed on all #{WEB_LOGIN_ATTEMPTS} attempts — " \
+                 "#{last_error.class}: #{last_error.message}")
+end
+
+# Fully automate Apple's SMS 2FA: SPACESHIP_2FA_SMS_DEFAULT_PHONE_NUMBER forces the
+# SMS path, and we override spaceship's interactive code prompt to poll an
+# SMS-retrieval gateway (SMS_2FA_GATEWAY_URL) for the freshly-arrived code.
+def install_sms_2fa_patch!
+  UI.user_error!("SMS_2FA_GATEWAY_URL not set — cannot auto-handle Apple 2FA") if ENV["SMS_2FA_GATEWAY_URL"].to_s.empty?
+
+  Spaceship::Client.class_eval do
+    define_method(:ask_for_2fa_code) do |text|
+      code_length = (text[/(\d+)\s*digit/, 1] || "6").to_i
+      pattern = /\b(\d{#{code_length}})\b/
+      UI.message("Auto-fetching #{code_length}-digit Apple 2FA code from SMS gateway...")
+      sleep(8) # let Apple's SMS land at the gateway first
+      deadline = Time.now + 150
+      loop do
+        begin
+          body = Net::HTTP.get(URI(ENV.fetch("SMS_2FA_GATEWAY_URL"))).to_s
+          code = body.scan(pattern).flatten.last
+          if code
+            UI.success("Got 2FA code from SMS gateway")
+            break code
+          end
+          UI.message("No #{code_length}-digit code in gateway response yet; retrying...")
+        rescue => e
+          UI.message("SMS gateway fetch error (#{e.message}); retrying...")
+        end
+        UI.user_error!("No #{code_length}-digit 2FA code from the SMS gateway within timeout") if Time.now > deadline
+        sleep(6)
+      end
+    end
+  end
+end
+
+def asc_app_id!
+  ENV.fetch("CM_APP_STORE_APPLE_ID")
+end
+
+# Raw authenticated GET against the iris backend, carrying the web-session cookie.
+def iris_get(path, params = {})
+  asc_web_get("iris", path, params)
+end
+
+# The ASC web UI's other backend. olympus/v1/actors is the first call the UI makes after login and
+# carries the provider (team) name — the one place a CLOSED account says so.
+def olympus_get(path, params = {})
+  asc_web_get("olympus", path, params)
+end
+
+def asc_web_get(backend, path, params = {})
+  host = "https://appstoreconnect.apple.com"
+  query = params.empty? ? "" : ("?" + URI.encode_www_form(params))
+  uri = URI("#{host}/#{backend}/#{path}#{query}")
+  req = Net::HTTP::Get.new(uri)
+  req["Cookie"] = Spaceship::Tunes.client.cookie
+  req["X-Csrf-Itc"] = "[asc-ui]"
+  req["Accept"] = "application/vnd.api+json"
+  req["User-Agent"] = "AppStoreMonitor (rejection fetcher)"
+  res = Net::HTTP.start(uri.host, uri.port, use_ssl: true) { |http| http.request(req) }
+  unless res.code.to_i.between?(200, 299)
+    UI.user_error!("#{backend} GET #{path} -> HTTP #{res.code}: #{res.body.to_s[0, 300]}")
+  end
+  res.body.to_s.strip.empty? ? {} : JSON.parse(res.body)
+end
+
+# Apple renames the provider when it closes an account:
+#
+#   "Serhii Khraban - CLOSED 10-06-2026-143324"
+#
+# verified in a HAR of a closed account's own web session (2026-10-12). The stamp is passed on
+# exactly as Apple wrote it rather than reparsed, because whether "10-06" is October 6th or June
+# 10th cannot be told from the string, and a confidently wrong date is worse than a raw one.
+CLOSED_PROVIDER = /\s-\s*CLOSED\s+(\d{2}-\d{2}-\d{4})-(\d{2})(\d{2})(\d{2})\s*\z/i
+
+# The closed provider on this session, or nil. Read from olympus/actors because it still answers
+# 200 after closure — unlike resolutionCenterThreads and reviewSubmissions, which answer 403 and
+# are why this lane used to fail on a closed account instead of reporting it.
+def provider_closure
+  resp = olympus_get("v1/actors", { "include" => "provider,person", "limit" => 2000 })
+  (resp["included"] || []).each do |r|
+    next unless r["type"] == "providers"
+    name = r.dig("attributes", "name").to_s
+    m = CLOSED_PROVIDER.match(name)
+    next unless m
+    return {
+      "providerName" => name,
+      "closedStamp" => "#{m[1]} #{m[2]}:#{m[3]}:#{m[4]}",
+    }
+  end
+  nil
+end
+
+# Lightweight attachment references (filename + pre-signed downloadUrl). We deliberately do NOT
+# download or base64 the bytes here — that would bloat the callback POST (a couple of screenshots
+# already exceed the receiver's body limit). AppStoreMonitor fetches the bytes from the URL itself.
+# Guideline codes from the heading a reviewer message opens with, shaped like reviewRejections
+# reasons so the rest of the pipeline can't tell them apart:
+#   "Guideline 2.1 - Performance - App Completeness"
+#     -> [{section 2.1, description "Performance: App Completeness", code 2.1}]
+#   "Guidelines 2.5.19 - Performance - Software Requirements and 5.6 - Developer Code of Conduct"
+#     -> 2.5 "Performance: Software Requirements" (2.5.19), 5.6 "Developer Code of Conduct" (5.6)
+# Empty when the message doesn't open with such a heading (a follow-up, a question, an approval).
+def guideline_reasons(body_html)
+  text = body_html.to_s.gsub(%r{<br\s*/?>|</p>|</div>|</h\d>}i, "\n").gsub(/<[^>]+>/, "")
+              .gsub("&nbsp;", " ").gsub("&amp;", "&").gsub("&lt;", "<").gsub("&gt;", ">")
+  first = text.lines.map(&:strip).find { |l| !l.empty? }.to_s
+  m = first.match(/\AGuidelines?\s+(\d.*)\z/i) or return []
+  # map + compact rather than filter_map: the CI Mac's fallback lane runs a Ruby older than 2.7.
+  m[1].split(/\s*,\s*(?=\d)|\s+and\s+(?=\d)/i).map do |part|
+    # Apple suffixes some codes with a letter: "2.1(a)", "4.3(a)".
+    pm = part.strip.match(/\A(\d+(?:\.\d+)+)(\([a-z0-9]+\))?\s*-\s*(.+)\z/i)
+    next nil unless pm
+    { "section" => pm[1].split(".")[0, 2].join("."),
+      "description" => pm[3].split(/\s+-\s+/).map(&:strip).join(": "),
+      "code" => pm[1] + pm[2].to_s }
+  end.compact
+end
+
+def attachment_refs(resources)
+  (resources || []).select { |r| r["type"].to_s.downcase.include?("attachment") }.map do |a|
+    attrs = a["attributes"] || {}
+    url = attrs["url"] || attrs["downloadUrl"] || attrs["assetUrl"] || (attrs["asset"] || {})["url"]
+    next nil if url.nil? || url.to_s.empty?
+    { "fileName" => (attrs["fileName"] || attrs["name"] || "attachment"), "downloadUrl" => url }
+  end.compact
+end
+
+def post_callback(url, secret_header, secret, payload)
+  uri = URI(url)
+  req = Net::HTTP::Post.new(uri)
+  req["Content-Type"] = "application/json"
+  req[secret_header] = secret unless secret.to_s.empty?
+  req.body = payload.to_json
+  res = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") { |http| http.request(req) }
+  UI.message("Callback POST -> HTTP #{res.code}")
+end
+
+def post_rejection_callback(url, secret, payload)
+  post_callback(url, "X-Rejection-Secret", secret, payload)
+end
+
+def post_termination_callback(url, secret, payload)
+  post_callback(url, "X-Termination-Secret", secret, payload)
+end
+
+platform :ios do
+  desc "Fetch Resolution Center rejection details over a web session and POST them " \
+       "to REJECTION_CALLBACK_URL. Triggered by AppStoreMonitor on a REJECTED webhook."
+  lane :fetch_rejection_details do
+    callback_url = ENV["REJECTION_CALLBACK_URL"].to_s
+    UI.user_error!("REJECTION_CALLBACK_URL not set") if callback_url.empty?
+    secret = ENV["REJECTION_CALLBACK_SECRET"].to_s
+    app_id = asc_app_id!
+
+    begin
+      asc_web_login!
+
+      # Walk ALL submissions and collect every rejection (a thread that carries reviewRejections).
+      subs = iris_get("v1/apps/#{app_id}/reviewSubmissions", { "limit" => 200 })["data"] || []
+      UI.user_error!("No review submissions for app #{app_id}") if subs.empty?
+
+      rejections = []
+
+      subs.each do |s|
+        threads = iris_get(
+          "v1/resolutionCenterThreads",
+          { "filter[reviewSubmission]" => s["id"], "include" => "reviewSubmission" }
+        )["data"] || []
+
+        threads.each do |thread|
+          thread_id = thread["id"]
+
+          # Messages carry the reviewer text + per-message attachments, and each links to the
+          # reviewRejection(s) it announced (via include=rejections). Index messages by id and build
+          # the rejection-id -> message map so every rejection can pull the message it belongs to.
+          msg_resp = iris_get(
+            "v1/resolutionCenterThreads/#{thread_id}/resolutionCenterMessages",
+            {
+              "include" => "fromActor,rejections,resolutionCenterMessageAttachments",
+              "limit[rejections]" => 2000,
+              "limit[resolutionCenterMessageAttachments]" => 1000,
+            }
+          )
+          msg_incl_by_id = {}
+          (msg_resp["included"] || []).each { |r| msg_incl_by_id[r["id"]] = r }
+          msg_for_rej = {}
+          (msg_resp["data"] || []).each do |m|
+            (m.dig("relationships", "rejections", "data") || []).each { |rr| msg_for_rej[rr["id"]] ||= m }
+          end
+
+          # reviewRejections are the per-rejection unit: ONE record each. A thread accumulates several
+          # over time (e.g. a 2.1 rejection, then later a 4.3) — each has its own reasons, version and
+          # attachments, so we must NOT merge them into a single row (the old per-thread bug).
+          rej_data = []
+          rej_incl_by_id = {}
+          begin
+            rej = iris_get(
+              "v1/reviewRejections",
+              {
+                "filter[resolutionCenterMessage.resolutionCenterThread]" => thread_id,
+                "include" => "appStoreVersion,rejectionAttachments",
+                "limit" => 2000,
+              }
+            )
+            rej_data = rej["data"] || []
+            (rej["included"] || []).each { |r| rej_incl_by_id[r["id"]] = r }
+          rescue => e
+            UI.important("reviewRejections fetch for #{thread_id} failed (#{e.message}); skipping thread")
+          end
+
+          rej_data.each do |rr|
+            reasons = (rr.dig("attributes", "reasons") || [])
+                        .map { |r| { "section" => r["reasonSection"], "description" => r["reasonDescription"], "code" => r["reasonCode"] } }
+            next if reasons.empty?  # not a rejection (e.g. an approval conversation) — skip
+
+            ver_id = rr.dig("relationships", "appStoreVersion", "data", "id")
+            version = ver_id ? rej_incl_by_id.dig(ver_id, "attributes", "versionString") : nil
+
+            # The reviewer message that announced this rejection (its text + createdDate + attachments).
+            msg = msg_for_rej[rr["id"]]
+            created = (msg && msg.dig("attributes", "createdDate")) ||
+                      rr.dig("attributes", "createdDate") ||
+                      thread.dig("attributes", "createdDate")
+
+            messages = msg ? [{
+              "fromActor" => msg.dig("relationships", "fromActor", "data", "id"),
+              "createdDate" => msg.dig("attributes", "createdDate"),
+              "bodyHtml" => msg.dig("attributes", "messageBody"),
+            }] : []
+
+            # Attachments: this rejection's own + those on its reviewer message (deduped by id).
+            att_by_id = {}
+            (rr.dig("relationships", "rejectionAttachments", "data") || []).each do |a|
+              obj = rej_incl_by_id[a["id"]]; att_by_id[a["id"]] = obj if obj
+            end
+            if msg
+              (msg.dig("relationships", "resolutionCenterMessageAttachments", "data") || []).each do |a|
+                obj = msg_incl_by_id[a["id"]]; att_by_id[a["id"]] = obj if obj
+              end
+            end
+            attachments = attachment_refs(att_by_id.values)
+
+            rejections << {
+              "versionString" => version,
+              "submissionId" => s["id"],
+              "createdDate" => created,
+              "reasons" => reasons,
+              "messages" => messages,
+              "attachments" => attachments,
+              # A reply has to be addressable: the Resolution Center thread is what a response is
+              # posted into (via its draft message), and the reviewer message id identifies which
+              # message we are answering. Reading them costs nothing here and there is no second
+              # way to obtain them later — the ids never appear outside iris.
+              "threadId" => thread_id,
+              "messageId" => (msg && msg["id"]),
+              "source" => "reviewRejection",
+            }
+          end
+
+          # Fallback: a reviewer message that announces a rejection with no reviewRejections record
+          # behind it (or one whose reasons came back empty). Seen 2026-10-22: 14 apps rejected in
+          # two minutes under "Guidelines 2.5.19 - Performance - Software Requirements and 5.6 -
+          # Developer Code of Conduct", and every fetch returned only the app's OLD rejection. The
+          # message itself names the guidelines in its first line, so read them from there.
+          #
+          # Strictly newer than anything this thread already produced, so history that was matched
+          # the normal way can never come back a second time under a different line in Jira; and
+          # only messages that open with Apple's own "Guideline(s) N.N" heading, from Apple's side.
+          covered = rejections.select { |r| r["threadId"] == thread_id }
+          newest_known = covered.map { |r| r["createdDate"].to_s }.max.to_s
+          covered_ids = covered.map { |r| r["messageId"] }.compact
+          (msg_resp["data"] || []).each do |m|
+            next if covered_ids.include?(m["id"])
+            created = m.dig("attributes", "createdDate").to_s
+            next if created.empty? || created <= newest_known
+            actor = msg_incl_by_id[m.dig("relationships", "fromActor", "data", "id")]
+            next if actor && actor.dig("attributes", "actorType").to_s =~ /USER|DEVELOPER|API/i
+            reasons = guideline_reasons(m.dig("attributes", "messageBody"))
+            next if reasons.empty?
+            atts = (m.dig("relationships", "resolutionCenterMessageAttachments", "data") || [])
+                     .map { |a| msg_incl_by_id[a["id"]] }.compact
+            rejections << {
+              "versionString" => nil,
+              "submissionId" => s["id"],
+              "createdDate" => created,
+              "reasons" => reasons,
+              "messages" => [{
+                "fromActor" => m.dig("relationships", "fromActor", "data", "id"),
+                "createdDate" => created,
+                "bodyHtml" => m.dig("attributes", "messageBody"),
+              }],
+              "attachments" => attachment_refs(atts),
+              "threadId" => thread_id,
+              "messageId" => m["id"],
+              "source" => "message",
+            }
+            UI.important("Rejection read from the reviewer message #{m["id"]} (no reviewRejections record): " +
+                         reasons.map { |r| r["code"] }.join(", "))
+          end
+        end
+      end
+
+      UI.user_error!("No rejections found across #{subs.size} submission(s)") if rejections.empty?
+      rejections.sort_by! { |r| r["createdDate"].to_s }  # oldest -> newest
+
+      post_rejection_callback(callback_url, secret, {
+        "status" => "success",
+        "appStoreId" => app_id,
+        "rejections" => rejections,
+      })
+      UI.success("Posted #{rejections.size} rejection(s)")
+    rescue => e
+      UI.important("fetch_rejection_details failed: #{e.message}")
+      begin
+        post_rejection_callback(callback_url, secret, {
+          "status" => "error", "appStoreId" => app_id, "error" => e.message,
+        })
+      rescue => post_err
+        UI.important("Failed to POST error callback too: #{post_err.message}")
+      end
+      raise
+    end
+  end
+
+  desc "Collect Apple's Resolution Center 'app message' notices (which is where a Pending " \
+       "Termination Notice lands) and POST them to TERMINATION_CALLBACK_URL. AppStoreMonitor " \
+       "decides which of them mean the account is being terminated."
+  lane :check_account_termination do
+    callback_url = ENV["TERMINATION_CALLBACK_URL"].to_s
+    UI.user_error!("TERMINATION_CALLBACK_URL not set") if callback_url.empty?
+    secret = ENV["TERMINATION_CALLBACK_SECRET"].to_s
+    app_id = asc_app_id!
+
+    begin
+      asc_web_login!
+
+      # A CLOSED account first. It is the stronger verdict, it can be read from an endpoint that
+      # still answers, and the Resolution Center reads below 403 on a closed account — so checking
+      # it second would turn every closure into an "error" again. A failure to read it is not a
+      # verdict either way: carry on to the notices exactly as before.
+      closure = begin
+        provider_closure
+      rescue => e
+        UI.important("Couldn't read the provider name (#{e.message}) — checking notices as usual")
+        nil
+      end
+      if closure
+        post_termination_callback(callback_url, secret, {
+          "status" => "success",
+          "appStoreId" => app_id,
+          "accountClosed" => true,
+          "providerName" => closure["providerName"],
+          "closedStamp" => closure["closedStamp"],
+          "notices" => [],
+        })
+        UI.success("Account is CLOSED: #{closure['providerName']}")
+        next
+      end
+
+      # A termination notice is an APP_MESSAGE_* thread, NOT a rejection thread: it hangs off the app
+      # with no reviewSubmission and no appStoreVersion. Same threadType filter the ASC "Unresolved
+      # Issues" page uses, so we see exactly what a human would see there.
+      resp = iris_get(
+        "v1/apps/#{app_id}/resolutionCenterThreads",
+        {
+          "include" => "appMessageThreadDetail,app",
+          "filter[threadType]" => "APP_MESSAGE_ARC,APP_MESSAGE_ARB,APP_MESSAGE_COMM,APP_MESSAGE_INFORMATIONAL",
+          "limit" => 200,
+        }
+      )
+      incl = {}
+      (resp["included"] || []).each { |r| incl[[r["type"], r["id"]]] = r }
+      app_attrs = ((resp["included"] || []).find { |r| r["type"] == "apps" } || {})["attributes"] || {}
+
+      notices = []
+      (resp["data"] || []).each do |thread|
+        thread_id = thread["id"]
+        detail_id = thread.dig("relationships", "appMessageThreadDetail", "data", "id")
+        detail = (detail_id && (incl[["appMessageThreadDetails", detail_id]] || {})["attributes"]) || {}
+
+        msg_resp = iris_get(
+          "v1/resolutionCenterThreads/#{thread_id}/resolutionCenterMessages",
+          {
+            "include" => "fromActor,rejections,resolutionCenterMessageAttachments",
+            "limit[rejections]" => 2000,
+            "limit[resolutionCenterMessageAttachments]" => 1000,
+          }
+        )
+        msg_incl = {}
+        (msg_resp["included"] || []).each { |r| msg_incl[r["id"]] = r }
+
+        (msg_resp["data"] || []).each do |m|
+          actor = m.dig("relationships", "fromActor", "data", "id").to_s
+          next unless actor.upcase == "APPLE"  # our own replies in the thread aren't notices
+
+          # Apple cites the violated agreement section the same way it cites a guideline on a
+          # rejection (e.g. 0.10.0 "Before You Submit: Program License Agreement").
+          reasons = (m.dig("relationships", "rejections", "data") || []).flat_map do |rr|
+            obj = msg_incl[rr["id"]]
+            ((obj && obj.dig("attributes", "reasons")) || []).map do |r|
+              { "section" => r["reasonSection"], "description" => r["reasonDescription"], "code" => r["reasonCode"] }
+            end
+          end
+
+          atts = (m.dig("relationships", "resolutionCenterMessageAttachments", "data") || [])
+                   .map { |a| msg_incl[a["id"]] }.compact
+
+          notices << {
+            "threadId" => thread_id,
+            "threadType" => thread.dig("attributes", "threadType"),
+            "threadState" => thread.dig("attributes", "state"),
+            "messageStatus" => detail["status"],
+            "gracePeriodExpiryDate" => detail["gracePeriodExpiryDate"],
+            "createdDate" => m.dig("attributes", "createdDate"),
+            "fromActor" => actor,
+            "bodyHtml" => m.dig("attributes", "messageBody"),
+            "reasons" => reasons,
+            "attachments" => attachment_refs(atts),
+          }
+        end
+      end
+
+      notices.sort_by! { |n| n["createdDate"].to_s }  # oldest -> newest
+
+      # An empty list is a valid answer ("no notices"), not an error — post it either way.
+      post_termination_callback(callback_url, secret, {
+        "status" => "success",
+        "appStoreId" => app_id,
+        "appStoreStatus" => app_attrs["appStoreLegacyStatus"],
+        "appRemovedDate" => app_attrs["removedDate"],
+        "notices" => notices,
+      })
+      UI.success("Posted #{notices.size} Apple notice(s)")
+    rescue => e
+      UI.important("check_account_termination failed: #{e.message}")
+      begin
+        post_termination_callback(callback_url, secret, {
+          "status" => "error", "appStoreId" => app_id, "error" => e.message,
+        })
+      rescue => post_err
+        UI.important("Failed to POST error callback too: #{post_err.message}")
+      end
+      raise
+    end
+  end
+end
